@@ -7,6 +7,6 @@ Future: basic navigation as sprite character on surface, basic quest paths and s
 
 Coded on my phone using the AIDE IDE and meant for deployment to that platform.
 
-However, uses OpenGL ES2 for all rendering, and can be fairly easily ported except for highly Android specific sextions like MainActivity, which is the starting point for the program.
+However, uses OpenGL ES2 for all rendering, and can be fairly easily ported except for highly Android specific sections like MainActivity, which is the starting point for the program.
 
 May also serve as instructional for setting OpenGl rendering on Android.
