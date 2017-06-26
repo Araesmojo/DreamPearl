@@ -1,0 +1,1 @@
+varying vec2 v_TexCoordinate;   // Interpolated texture coordinate per fragment

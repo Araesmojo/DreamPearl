@@ -1,0 +1,1 @@
+varying vec4 v_Color;  // This will be passed into the fragment shader.

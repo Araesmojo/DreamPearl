@@ -1,0 +1,1 @@
+attribute vec3 a_Normal;		// Per-vertex normal information we will pass in.

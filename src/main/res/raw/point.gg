@@ -1,0 +1,19 @@
+# uniform
+
+# attribute
+attribute float a_PointSize;		// A constant representing the size of the points we look at    		       
+
+# body
+gl_PointSize = a_PointSize; 
+
+# end
+
+## Shared variables
+# varying
+
+## Fragment variables
+# uniform
+
+# body
+
+# end

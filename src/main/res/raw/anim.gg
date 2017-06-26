@@ -1,0 +1,25 @@
+# uniform
+
+# attribute
+attribute vec2 a_TexCoordinate_Anim; // Per-vertex texture coordinate information we will pass in.
+
+# body
+// Pass through the texture coordinate.
+v_TexCoordinate_Anim = a_TexCoordinate_Anim;
+
+# end
+
+## Shared variables
+# varying
+varying vec2 v_TexCoordinate_Anim;   // Interpolated texture coordinate per fragment
+
+## Fragment variables
+# uniform
+uniform float u_LERP;
+
+# body
+
+# end
+REPLACE
+* texture2D(u_Texture, v_TexCoordinate)
+* ( texture2D(u_Texture, v_TexCoordinate) * (1.0-u_LERP) + texture2D(u_Texture, v_TexCoordinate_Anim) * (1.0-u_LERP) )

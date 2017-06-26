@@ -1,0 +1,23 @@
+# uniform
+
+# attribute
+attribute vec2 a_TexCoordinate; // Per-vertex texture coordinate information we will pass in.
+
+# body
+// Pass through the texture coordinate.
+v_TexCoordinate = a_TexCoordinate;
+
+# end
+
+## Shared variables
+# varying
+varying vec2 v_TexCoordinate;   // Interpolated texture coordinate per fragment
+
+## Fragment variables
+# uniform
+uniform sampler2D u_Texture;    // The input texture
+
+# body
+
+# end
+* texture2D(u_Texture, v_TexCoordinate)

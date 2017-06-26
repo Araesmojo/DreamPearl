@@ -1,0 +1,1 @@
+attribute vec2 a_TexCoordinate; // Per-vertex texture coordinate information we will pass in.

@@ -1,0 +1,1 @@
+varying vec2 v_TexCoordinate;   // This will be passed into the fragment shader.
