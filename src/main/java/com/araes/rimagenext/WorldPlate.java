@@ -103,4 +103,12 @@ public class WorldPlate extends WorldVert
 			}
 		}
 	}
+	
+	public int getTriCnt(){
+		int cnt = 0;
+		for( List<WorldTri> ring : mTris ){
+			cnt += ring.size();
+		}
+		return cnt;
+	}
 }

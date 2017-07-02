@@ -26,6 +26,17 @@ public class Vec3
 	public float gY(){ return y; }
 	public float gZ(){ return z; }
 	
+	public float gRho(){ return x; }
+	public float gT(){ return y; }
+	public float gP(){ return z; }
+	
+	public Vec2 gXY(){ return new Vec2( x, y ); }
+	public Vec2 gYZ(){ return new Vec2( y, z ); }
+	public Vec2 gZX(){ return new Vec2( z, x ); }
+	public Vec2 gYX(){ return new Vec2( y, x ); }
+	public Vec2 gZY(){ return new Vec2( z, y ); }
+	public Vec2 gXZ(){ return new Vec2( x, z ); }
+	
 	public void sX( float xIn ){ x = xIn; isDirty = true; }
 	public void sY( float yIn ){ y = yIn; isDirty = true; }
 	public void sZ( float zIn ){ z = zIn; isDirty = true; }

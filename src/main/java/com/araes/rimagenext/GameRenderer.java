@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
+import android.graphics.*;
+import java.io.*;
 
 /**
  * This class implements our custom renderer. Note that the GL10 parameter passed in is unused for OpenGL ES 2.0
@@ -84,6 +86,10 @@ public class GameRenderer implements GLSurfaceView.Renderer
 	public long mDelta60fps = 1000 / 60;
 
 	private int mPointPlateHandle;
+
+	private boolean takeScreenshot = true;
+
+	private int screenShotCnt = 0;
 	
 	/**
 	 * Initialize the model data.
@@ -599,6 +605,43 @@ public class GameRenderer implements GLSurfaceView.Renderer
 		// Draw2D elements like the HUD
 		mProjectionMatrix = mProjection2D;
 		draw2D();
+
+		// https://stackoverflow.com/questions/26808518/screenshot-on-android-opengl-es-application
+		if( takeScreenshot ) {
+			Logger.post("screenshot");
+			int screenshotSize = mWidth * mHeight;
+			ByteBuffer bb = ByteBuffer.allocateDirect( screenshotSize * 4 );
+			bb.order(ByteOrder.nativeOrder());
+			GLES20.glReadPixels( 0, 0, mWidth, mHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, bb );
+			int pixelsBuffer[] = new int[screenshotSize];
+			bb.asIntBuffer().get(pixelsBuffer);
+			bb = null;
+
+			for (int i = 0; i < screenshotSize; ++i) {
+				// The alpha and green channels' positions are preserved while the red and blue are swapped
+				pixelsBuffer[i] = ((pixelsBuffer[i] & 0xff00ff00)) | ((pixelsBuffer[i] & 0x000000ff) << 16) | ((pixelsBuffer[i] & 0x00ff0000) >> 16);
+			}
+
+			Bitmap bitmap = Bitmap.createBitmap( mWidth, mHeight, Bitmap.Config.ARGB_8888);
+			bitmap.setPixels( pixelsBuffer, screenshotSize-mWidth, -mWidth, 0, 0, mWidth, mHeight);
+			
+			File LogPath = mActivityContext.getExternalFilesDir("gamelogs");
+			LogPath.mkdirs();
+			String screenCntFrmt = String.format("%04d", screenShotCnt );
+			File OutFile = new File( LogPath, "GameScreen" + screenCntFrmt + ".png" );
+			FileOutputStream fOut = null;
+			try {
+				fOut = new FileOutputStream(OutFile);
+				bitmap.compress( Bitmap.CompressFormat.PNG, 85, fOut );
+			} catch (FileNotFoundException e){}
+			
+			try {
+				fOut.flush();
+				fOut.close();
+			} catch (IOException e){}
+			
+			screenShotCnt++;
+		}
 	}
 
 	private void draw3D()

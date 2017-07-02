@@ -4,6 +4,8 @@ public class WorldVert
 {
 	int ind = -1;
 	
+	public WorldVert Up = null;
+	
 	public Vec3 pos = new Vec3( 0.0f, 0.0f, 0.0f );
 	public Vec3 vel = new Vec3( 0.0f, 0.0f, 0.0f );
 	public Vec3 acc = new Vec3( 0.0f, 0.0f, 0.0f );
@@ -17,20 +19,22 @@ public class WorldVert
 	public float pctSurface;
 	
 	public float mass = 0.0f;
+	public float mol  = 0.0f;
+	public float molM = 1;
+	public float Cv   = 1;
 	
 	public float energy = 0.0f;
 	public float PE = 0.0f;
 	public float KE = 0.0f;
 	public float pressure = 0.0f;
 	public float temp = 288.15f;  // K
+	public float density;
 	
 	public float elevPerMass;
-	public float elevation;
+	public float elevation = 1.0f;
 	public float vol;
 
 	public boolean hasTriggered = false;
-
-	public float density;
 
 	public int prtAccumlated = 0;
 

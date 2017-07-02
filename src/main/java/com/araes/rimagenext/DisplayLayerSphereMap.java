@@ -18,8 +18,8 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 	private List<List<WorldTri>> mSurface;
 	private List<Particle> particles;
 	
-	private List<WorldVert> skyVerts;
-	private List<List<WorldTri>> skyLayer;
+	private List<WorldVert> skyVerts;;
+	private List<List<List<WorldTri>>> mSkyLayer;
 	private List<Particle> particlesAir;
 	
 	public int displayMode = DisplayMode.DEFAULT;
@@ -28,24 +28,27 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 	float mMaxPlateAngleVar = (float)Math.PI / 2; // 45 deg
 	float mTimeStepPlate = 0.01f;
 	float mTimeStepIco = 0.01f;
-	float mTimestepEarth = 0.1f;
+	float mTimestepEarth = 100.0f; // 100 million years
+	float mTimestepWind = 1;
 
 	// Note: always add the .#f to floats
 	// Java is stupid and will do math on them like int if you don't
-	public float mAreaSurfaceEarth = 4.0f*(float)Math.PI;//5.10e14f; // m2
-	public float mDensityAvgEarth = 1000.0f;//1500.0f; // kg/m3
-	public float mDensityAvgWater = 1000.0f; // kg/m3
+	public float mRadius           = 6371000.1f; // 6371000.0f m
+	public float mRadiusInv        = 1.0f/mRadius;
+	public float mAreaSurfaceEarth = 4.0f*(float)Math.PI*mRadius*mRadius;//5.10e14f; // m2
+	public float mDensityAvgEarth = 1500.1f;//1500.0f; // kg/m3
+	public float mDensityAvgWater = 1000.1f; // kg/m3
 	public float mDensityAvgAir = 1.21f; // kg/m3
-	public float mElevAvgTarget = 0.01f; // 1cm //10000.0f; // m
-	public float mVelPlate = 0.01f; // 1 cm/s // 10 cm/ yr
+	public float mElevAvgTarget = 10000.1f; // 1cm //10000.0f; // m
+	public float mVelPlate = 1000.1f; // 0.1 cm/s -> 1 km/yr
 	public float mPctLand = 0.6f;
 	public float mDragCoefPlate = 0.5f;
 	public float accGrav = 10.0f;
 	public float FRepelPntMag = 8.0f;
 	public float FRepelCoreMag = 0.5f;
 
-	private float ptSlvLimitSlope = 0.005f;;
-	private float ptSlvAddSlope = 0.025f;
+	private float ptSlvLimitSlope = 0.005f*mRadius*mRadius*mRadius;
+	private float ptSlvAddSlope = 0.025f*mRadius*mRadius*mRadius;
 
 	private float mTilt;
 
@@ -68,17 +71,21 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 	private boolean doneAssignSurfaceFlow = false;
 	private boolean doneEarth             = false;
 	private boolean doneCrustFlow         = false;
+	private boolean doneNormalizeEarth    = false;
 	private boolean doneFire              = false;
+	private boolean doneInitSkyLayers     = false;
 	private boolean doneWindVolumes       = false;
 	private boolean doneSetupWind         = false;
+	private boolean doneInitSkyBuffers    = false;
 	private boolean doneWind              = false;
 	private boolean doneWater             = false;
 	private boolean doneBiomes            = false;
 	private boolean doneLife              = false;
 	private boolean doneWorld             = false;
 
-	private float[] weightPlates;
-	private float[] weightIco;
+	public float[] weightPlates;
+	public float[] weightIco;
+	public float[] elevLines;
 
 	private long timeStart;
 	private long timeUpdate;
@@ -92,25 +99,37 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 	private int crustSolveCntMax = 100;
 	private int windSlvCnt = 0;
 	private int windSlvCntMax = 100;
-
-	protected ShortBuffer mIcoIndexBuffer;
+	
 	protected FloatBuffer mPlatePositions;
 	protected FloatBuffer mPlateColors;
 	protected FloatBuffer mPlatePointSize;
+	
 	protected FloatBuffer mIcoPositions;
 	protected FloatBuffer mIcoColors;
 	protected FloatBuffer mIcoPointSize;
+	
 	protected FloatBuffer mSurfacePositions;
 	protected FloatBuffer mSurfaceNormals;
 	protected FloatBuffer mSurfaceColors;
 	protected FloatBuffer mSurfaceTexCoords;
+	protected ShortBuffer mSurfaceIndexBuffer;
+	
+	protected FloatBuffer mSkyPositions;
+	protected FloatBuffer mSkyNormals;
+	protected FloatBuffer mSkyColors;
+	protected FloatBuffer mSkyTexCoords;
+	protected ShortBuffer mSkyIndexBuffer;
+
+	protected FloatBuffer mSkyPrtPositions;
+	protected FloatBuffer mSkyPrtColors;
+	protected FloatBuffer mSkyPrtPointSize;
 
 	protected int mPointSizeDataSize = 1;
 	protected int BYTES_PER_SHORT = 2;
 
 	private int breakCycle = 0;
 
-	private float prtNumDensity = 5000;
+	private float prtNumDensity = 4.2f;
 	
 	private FloatBuffer mPrtPositions;
 	private FloatBuffer mPrtColors;
@@ -118,8 +137,15 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 	private int mAirNumDensity = 10;
 
-	private float mTimestepWind = 1;
+	private int skyResCnt = 0;
+	private int skyResMax = 1;
+	private int skyLayerCnt = 0;
+	private int skyLayerCntMax = 5;
+	
+	public float skyLayerInitH = 2000.0f;
 
+	
+	
 	public DisplayLayerSphereMap( MainActivity context, GameRenderer renderer ){
 		super( context, renderer );
 	}
@@ -164,16 +190,17 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 			doneEarth = SolveEarth( mPlates, mVert, mSurface );
 		}
 
-		/*if( doneEarth && !doneFire ){
+		if( doneEarth && !doneFire ){
 			displayMode = DisplayMode.ELEV;
 			initSurfaceColorFB( mSurface.get( mSurface.size()-1 ) );
-			// solve heating and resulting wind
+			/*// solve heating and resulting wind
 			 float tTilt = (float)Math.PI / 18; // 10 deg
-		 	SolveFire( mSurface, tTilt );
-		}*/
+		 	SolveFire( mSurface, tTilt );*/
+			doneFire = true;
+		}
 
 		if( doneFire && !doneWind ){
-		 	doneWind = SolveWind( skyLayer, particlesAir, 5, 2000 );
+		 	doneWind = SolveWind( mVert, mSurface, mSkyLayer, particlesAir, skyResMax, skyLayerCntMax, skyLayerInitH );
 		}
 
 		// solve water evap/transport and biomes
@@ -198,6 +225,8 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		mVert = new ArrayList<WorldVert>();
 		mSurface = new ArrayList<List<WorldTri>>();
 		particles = new ArrayList<Particle>();
+		
+		mSkyLayer = new ArrayList<List<List<WorldTri>>>();
 
 		List<WorldTri> surface0 = new ArrayList<WorldTri>();
 		mSurface.add( surface0 );
@@ -220,7 +249,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 					WorldPlate plateNew = new WorldPlate( this, vert );
 					plateNew.world = this;
 					plates.add( plateNew );
-
+					plateNew.pos.mult( mRadius );
 				}
 			}
 		//} else if( !doneIco ){
@@ -316,7 +345,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 				ptSlvLastMvmt = ptSlvCurMvmt;
 
 				// check tp see if close enough to surface to create new triangles
-				checkTriBreak( points, surface );
+				checkReachSurface( points, surface );
 			} else {
 				donePointSolve = true;
 				doneInitPtSlv = false;
@@ -335,7 +364,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 	private void initPointSolve()
 	{
 		ptSlvLastMvmt = 0.0f;
-		ptSlvCurSlope = 0.02f;
+		ptSlvCurSlope = 0.02f*mRadius;
 		ptSlvTotSurface = 0;
 		doneInitPtSlv = true;
 	}
@@ -352,8 +381,8 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		float ySt = (float)Math.sin(theta);
 		float zSt = (float)( -Math.cos(phi) );
 		pnt.pos = new Vec3( xSt, ySt, zSt );
-		pnt.pos = pnt.pos.norm().mult( 0.1f );
-		pnt.vel = pnt.pos.norm().mult( 2*ptSlvCurMvmt / (p+1) );
+		pnt.pos = pnt.pos.norm().mult( 0.1f*mRadius );
+		pnt.vel = pnt.pos.norm().mult( 0.1f*mRadius );
 		points.add( pnt );
 		// although vert have 
 		pnt.pctSurface = weights[p];
@@ -368,6 +397,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 	private void solveBodyForces(List<WorldVert> points)
 	{
+		float mRInvSq = mRadiusInv * mRadiusInv;
 		for( int i = 0; i < points.size(); i++ ){
 			// for each point, look at each other point
 			// calculate reverse gravity based on mass pair
@@ -377,12 +407,14 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 				// vector between pnts
 				Vec3 delta = iPnt.pos.sub(jPnt.pos);
-				float dist = delta.length();
+				float dist = delta.length()*mRadiusInv;
 				Vec3 norm = delta.div( dist );
 
 				// repulsion like gravity
-				float repelF = FRepelPntMag * iPnt.pctSurface * jPnt.pctSurface / (dist*dist);
+				float repelF = FRepelPntMag * iPnt.pctSurface * jPnt.pctSurface / (dist*dist) * mRadius * mRadius * 0.25f;
 				Vec3 repelVec = norm.mult( repelF );
+				
+				//Logger.post( "repelF i,j,F " + i + ", " + j + ", " + repelF );
 
 				// change acc oppositely
 				iPnt.acc = iPnt.acc.add( repelVec.div(iPnt.pctSurface) );
@@ -393,13 +425,14 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 	private void solveSurfaceForces(List<WorldVert> points)
 	{
+		float mRInvSq = mRadiusInv * mRadiusInv;
 		for( int i = 0; i < points.size(); i++ ){
 			WorldVert iPnt = points.get(i);
 
 			// Apply bouyancy based on dist from center
 			// if small dist, large bouyancy 0-1
 			float dist = iPnt.pos.length();
-			float coreRepelF = FRepelCoreMag / iPnt.pctSurface * (1-dist)*(1-dist);
+			float coreRepelF = FRepelCoreMag / iPnt.pctSurface * (1-dist)*(1-dist) * mRadiusInv * 0.25f;
 			Vec3 coreRepelVec = iPnt.pos.norm().mult( coreRepelF );
 			//Logger.post("i; " + i + " i.pos; " + iPnt.pos.toS() + "dist; " + dist + " coreRepelVec; " + coreRepelVec.toS() );
 
@@ -408,11 +441,13 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 			// small distance, large drag
 			// much larger perpendicular to plane
 			float ptVel = iPnt.vel.length();
-			Vec3 velDampVec = ( iPnt.vel.mult( ptVel * ptVel ) ).mult( -mDragCoefPlate );
+			//Vec3 velDampVec = ( iPnt.vel.mult( ptVel * ptVel ) ).mult( -mDragCoefPlate );
 
+			//Logger.post( "CoreRepelVec " + coreRepelVec.toS() );//+ ", dampVec " + velDampVec.toS() );
+			
 			// update acc
 			iPnt.acc = iPnt.acc.add( coreRepelVec.div( iPnt.pctSurface ) );
-			iPnt.acc = iPnt.acc.add( velDampVec.div( iPnt.pctSurface ) );
+			//iPnt.acc = iPnt.acc.add( velDampVec.div( iPnt.pctSurface ) );
 			//Logger.post("i; " + i + " i.acc; " + iPnt.acc.toS() );
 		}
 	}
@@ -446,16 +481,16 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		return vecMvmt.length();
 	}
 
-	private void checkTriBreak(List<WorldVert> points, List<WorldTri> surface)
+	private void checkReachSurface(List<WorldVert> points, List<WorldTri> surface)
 	{
 		for( int i = 0; i < points.size(); i++ ){
 			WorldVert iPnt = points.get(i);
 
 			// if pos outside sphere
 			float dist = iPnt.pos.length();
-			if( dist > 1 ){
+			if( dist > mRadius ){
 				// return to boundary
-				iPnt.pos = iPnt.pos.div( dist );
+				iPnt.pos = iPnt.pos.div( dist ).mult( mRadius );
 				iPnt.hasTriggered = true;
 			}// end dist check
 		}
@@ -482,7 +517,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		
 		for( int p = 0; p < vData.length; p++ ){
 			WorldVert pnt = new WorldVert( p, 0.0833333f );
-			pnt.pos = new Vec3( vData[p][0], vData[p][1], vData[p][2] );
+			pnt.pos = new Vec3( vData[p][0], vData[p][1], vData[p][2] ).mult( mRadius );
 			verts.add( pnt );
 		}
 		
@@ -551,12 +586,12 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		float[] pointSize = new float[ pntsDraw * mPointSizeDataSize ];
 		for( int i = 0; i < pntsDraw; i++ ){
 			WorldVert point = points.get(i);
-			pointPos[ d++ ] = point.pos.gX();
-			pointPos[ d++ ] = point.pos.gY();
-			pointPos[ d++ ] = point.pos.gZ();
-			pointColor[ c++ ] = point.pos.gX()*0.4f + 0.6f;
-			pointColor[ c++ ] = point.pos.gY()*0.4f + 0.6f;
-			pointColor[ c++ ] = point.pos.gZ()*0.4f + 0.6f;
+			pointPos[ d++ ] = point.pos.gX()*mRadiusInv;
+			pointPos[ d++ ] = point.pos.gY()*mRadiusInv;
+			pointPos[ d++ ] = point.pos.gZ()*mRadiusInv;
+			pointColor[ c++ ] = point.pos.gX()*mRadius*0.4f + 0.6f;
+			pointColor[ c++ ] = point.pos.gY()*mRadius*0.4f + 0.6f;
+			pointColor[ c++ ] = point.pos.gZ()*mRadius*0.4f + 0.6f;
 			pointColor[ c++ ] = 1.0f;
 			pointSize[ ps++ ] = ps*3.0f/(float)pntsDraw+6.0f;//point.pos.gZ()*3.0f + 6.0f;
 		}
@@ -591,12 +626,12 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 			for( int i = 0; i < 3; i++ ){
 				String out = "";
 				//Logger.post( "normals, pos, color, tex " );
-				triNormalData[ n ] = posNorm.gX(); //tri.zLocal_3D.gX(); n++; out += " " + tri.zLocal_3D.gX();
-				triNormalData[ n ] = posNorm.gY(); //tri.zLocal_3D.gY(); n++; out += " " + tri.zLocal_3D.gY();
-				triNormalData[ n ] = posNorm.gZ(); //tri.zLocal_3D.gZ(); n++; out += " " + tri.zLocal_3D.gZ();
-				triPosData[ p ]    = tri.corner.get(i).pos.gX(); p++; out += " || " + tri.corner.get(i).pos.gX();
-				triPosData[ p ]    = tri.corner.get(i).pos.gY(); p++; out += " " + tri.corner.get(i).pos.gY();
-				triPosData[ p ]    = tri.corner.get(i).pos.gZ(); p++; out += " " + tri.corner.get(i).pos.gZ();
+				triNormalData[ n ] = posNorm.gX(); n++; //tri.zLocal_3D.gX(); n++; out += " " + tri.zLocal_3D.gX();
+				triNormalData[ n ] = posNorm.gY(); n++; //tri.zLocal_3D.gY(); n++; out += " " + tri.zLocal_3D.gY();
+				triNormalData[ n ] = posNorm.gZ(); n++; //tri.zLocal_3D.gZ(); n++; out += " " + tri.zLocal_3D.gZ();
+				triPosData[ p ]    = tri.corner.get(i).pos.gX()*mRadiusInv; p++; out += " || " + tri.corner.get(i).pos.gX();
+				triPosData[ p ]    = tri.corner.get(i).pos.gY()*mRadiusInv; p++; out += " " + tri.corner.get(i).pos.gY();
+				triPosData[ p ]    = tri.corner.get(i).pos.gZ()*mRadiusInv; p++; out += " " + tri.corner.get(i).pos.gZ();
 				triTexData[ t ]    = TexCoorData[ t%12 ]; out += " || " + TexCoorData[ t%12 ]; t++;
 				triTexData[ t ]    = TexCoorData[ t%12 ]; out += " " + TexCoorData[ t%12 ]; t++;
 				//Logger.post( out );
@@ -612,10 +647,10 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		}
 		
 		// initialize byte buffer for the draw list
-		mIcoIndexBuffer = ByteBuffer
+		mSurfaceIndexBuffer = ByteBuffer
 			.allocateDirect(drawOrder.length * BYTES_PER_SHORT).order(ByteOrder.nativeOrder())
 			.asShortBuffer();
-		mIcoIndexBuffer.put(drawOrder).position(0);
+		mSurfaceIndexBuffer.put(drawOrder).position(0);
 		
 		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
 		fboP = InitializeBuffer( fboP, triPosData );
@@ -634,25 +669,8 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 		mTris = surface.size();
 		
-		float elevMax = 0.0f;
-		float elevMin = Float.MAX_VALUE;
-		float elevScale;
-		List<Float> elevSort = new ArrayList<Float>();
-		int bands = 10;
-		float[] elevCutoff = new float[bands];
-		if( displayMode == DisplayMode.ELEV ){
-			for( WorldVert vert : mVert ){
-				elevSort.add( vert.elevation );
-			}
-			
-			Collections.sort( elevSort );
-			
-			// sort into groups w cutoffs based on elev
-			int vPerBand = elevSort.size() / bands;
-			for( int i = 0; i < bands; i++ ){
-				int ind = vPerBand * i;
-				elevCutoff[ i ] = elevSort.get(ind);
-			}
+		if( elevLines != null ){
+			Logger.post( "Elevation lines" + ", 6 " + elevLines[6] + ", " + elevLines[9] );
 		}
 
 		int c = 0;
@@ -667,9 +685,9 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 			for( int i = 0; i < 3; i++ ){
 				String out = "";
 				if( displayMode == DisplayMode.DEFAULT ){
-					triColorData[ c ]  = tri.corner.get(i).pos.gX()*0.4f + 0.6f; c++;
-					triColorData[ c ]  = tri.corner.get(i).pos.gY()*0.4f + 0.6f; c++;
-					triColorData[ c ]  = tri.corner.get(i).pos.gZ()*0.4f + 0.6f; c++;
+					triColorData[ c ]  = tri.corner.get(i).pos.gX()*mRadius*0.4f + 0.6f; c++;
+					triColorData[ c ]  = tri.corner.get(i).pos.gY()*mRadius*0.4f + 0.6f; c++;
+					triColorData[ c ]  = tri.corner.get(i).pos.gZ()*mRadius*0.4f + 0.6f; c++;
 				} else if( displayMode == DisplayMode.RANDOM ){
 					triColorData[ c ]  = r; c++;
 					triColorData[ c ]  = g; c++;
@@ -684,13 +702,13 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 						triColorData[ c ]  = 1.0f; c++;
 						triColorData[ c ]  = 1.0f; c++;
 					}
-				} else if( displayMode == DisplayMode.WIRE ){
+				} else if( displayMode == DisplayMode.WIRE_VEL || displayMode == DisplayMode.WIRE_BNC ){
 					triColorData[ c ]  = 1.0f; c++;
 					triColorData[ c ]  = 1.0f; c++;
 					triColorData[ c ]  = 1.0f; c++;
 				} else if( displayMode == DisplayMode.ELEV ){
 					//Logger.post( "corner " + i + " elev " + tri.corner.get(i).elevation + " scaled " + ( tri.corner.get(i).elevation - elevMin ) / elevScale );
-					Vec3 tColor = findElevColor( tri.corner.get(i).elevation, elevCutoff );
+					Vec3 tColor = findElevColor( tri.corner.get(i).elevation, elevLines );
 					triColorData[ c ]= tColor.gX(); c++;
 					triColorData[ c ]= tColor.gY(); c++;
 					triColorData[ c ]= tColor.gZ(); c++;
@@ -699,9 +717,9 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 					triColorData[ c ]  = 1.0f; c++;
 					triColorData[ c ]  = 1.0f; c++;
 				} else {
-					triColorData[ c ]  = tri.pos.gX()*0.4f + 0.6f; c++;
-					triColorData[ c ]  = tri.pos.gY()*0.4f + 0.6f; c++;
-					triColorData[ c ]  = tri.pos.gZ()*0.4f + 0.6f; c++;
+					triColorData[ c ]  = tri.pos.gX()*mRadius*0.4f + 0.6f; c++;
+					triColorData[ c ]  = tri.pos.gY()*mRadius*0.4f + 0.6f; c++;
+					triColorData[ c ]  = tri.pos.gZ()*mRadius*0.4f + 0.6f; c++;
 				}
 				triColorData[ c ]  = 1.0f; out += " " + triColorData[ c ]; c++;
 				//Logger.post( out );
@@ -712,22 +730,268 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		mSurfaceColors = fboC;
 	}
 	
-	private Vec3 findElevColor( float elevation, float[] elevCutoffs )
+	private Vec3 findElevColor( float elevation, float[] elevLines )
 	{
 		// elev should be 0 - 1
+		float outRatio;
+		//Logger.post( "elevation " + elevation );
 		Vec3 out = new Vec3();
-		if( elevation < elevCutoffs[0] ){ out = new Vec3( 0.0f, 0.0f, 0.5f ); } else
-		if( elevation < elevCutoffs[1] ){ out = new Vec3( 0.0f, 0.0f, 0.75f ); } else
-		if( elevation < elevCutoffs[2] ){ out = new Vec3( 0.0f, 0.0f, 1.0f ); } else
-		if( elevation < elevCutoffs[3] ){ out = new Vec3( 0.0f, 0.0f, 1.0f ); } else
-		if( elevation < elevCutoffs[4] ){ out = new Vec3( 0.25f, 0.25f, 1.0f ); } else
-		if( elevation < elevCutoffs[5] ){ out = new Vec3( 0.0f, 1.0f, 1.0f ); } else
-		if( elevation < elevCutoffs[6] ){ out = new Vec3( 0.0f, 1.0f, 0.0f ); } else
-		if( elevation < elevCutoffs[7] ){ out = new Vec3( 0.0f, 0.5f, 0.0f ); } else
-		if( elevation < elevCutoffs[8] ){ out = new Vec3( 0.5f, 0.5f, 0.5f ); }
-		else                            { out = new Vec3( 1.0f, 1.0f, 1.0f ); }
+		if( elevation < elevLines[0] ){
+			outRatio = elevation / elevLines[0];
+			out = new Vec3( 0.0f, 0.0f, 0.5f ).mult(outRatio);
+		} else if( elevation < elevLines[1] ){
+			outRatio = ( elevation - elevLines[0] )/( elevLines[1] - elevLines[0] );
+			out = ( new Vec3( 0.0f, 0.0f, 0.75f ).mult(outRatio) ).add( new Vec3( 0.0f, 0.0f, 0.5f ).mult(1-outRatio) );
+		} else if( elevation < elevLines[3] ){
+			outRatio = ( elevation - elevLines[1] )/( elevLines[3] - elevLines[1] );
+			out = ( new Vec3( 0.0f, 0.0f, 1.0f ).mult(outRatio) ).add( new Vec3( 0.0f, 0.0f, 0.75f ).mult(1-outRatio) );
+		} else if( elevation < elevLines[4] ){
+			outRatio = ( elevation - elevLines[3] )/( elevLines[4] - elevLines[3] );
+			out = ( new Vec3( 0.25f, 0.25f, 1.0f ).mult(outRatio) ).add( new Vec3( 0.0f, 0.0f, 1.0f ).mult(1-outRatio) );
+		} else if( elevation < elevLines[5] ){
+			outRatio = ( elevation - elevLines[4] )/( elevLines[5] - elevLines[4] );
+			out = ( new Vec3( 0.0f, 1.0f, 1.0f ).mult(outRatio) ).add( new Vec3( 0.25f, 0.25f, 1.0f ).mult(1-outRatio) );;
+		} else if( elevation < elevLines[6] ){
+			outRatio = ( elevation - elevLines[5] )/( elevLines[6] - elevLines[5] );
+			out = ( new Vec3( 0.0f, 1.0f, 0.0f ).mult(outRatio) ).add( new Vec3( 0.0f, 1.0f, 1.0f ).mult(1-outRatio) );
+		} else if( elevation < elevLines[7] ){
+			outRatio = ( elevation - elevLines[6] )/( elevLines[7] - elevLines[6] );
+			out = ( new Vec3( 0.0f, 0.5f, 0.0f ).mult(outRatio) ).add( new Vec3( 0.0f, 1.0f, 0.0f ).mult(1-outRatio) );
+			out = new Vec3( 0.0f, 0.5f, 0.0f );
+		} else if( elevation < elevLines[8] ){
+			outRatio = ( elevation - elevLines[7] )/( elevLines[8] - elevLines[7] );
+			out = ( new Vec3( 0.5f, 0.5f, 0.5f ).mult(outRatio) ).add( new Vec3( 0.0f, 0.5f, 0.0f ).mult(1-outRatio) );
+		} else {
+			outRatio = ( elevation - elevLines[8] )/( elevLines[9] - elevLines[8] );
+			out = ( new Vec3( 1.0f, 1.0f, 1.0f ).mult(outRatio) ).add( new Vec3( 0.5f, 0.5f, 0.5f ).mult(1-outRatio) );
+		}
 
 		return out;
+	}
+	
+	private void initSurfacePosFBwElev(List<WorldTri> surface )
+	{
+		//Logger.post( "Reinitialoze surface w weights");
+		FloatBuffer fboP = null;
+
+		mTris = surface.size();
+
+		int p = 0;
+
+		float[] triPosData = new float[ mTris * 3 * mPositionDataSize ];
+		for( WorldTri tri : surface ){
+			for( int i = 0; i < 3; i++ ){
+				WorldVert cI = tri.corner.get(i);
+				triPosData[ p ] = cI.pos.gX() * mRadiusInv; p++;
+				triPosData[ p ] = cI.pos.gY() * mRadiusInv; p++;
+				triPosData[ p ] = cI.pos.gZ() * mRadiusInv; p++;
+			}
+		}
+
+		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
+		fboP = InitializeBuffer( fboP, triPosData );
+		mSurfacePositions = fboP;
+	}
+
+	private void initParticleFB()
+	{
+		FloatBuffer fboP = null, fboC = null, fboPS = null;
+
+		int d = 0;
+		int c = 0;
+		int ps = 0;
+
+		float[] pointPos = new float[ particles.size() * mPositionDataSize ];
+		float[] pointColor = new float[ particles.size() * mColorDataSize ];
+		float[] pointSize = new float[ particles.size() * mPointSizeDataSize ];
+
+		for( int i = 0; i < particles.size(); i++ ){
+			Particle point = particles.get(i);
+			pointPos[ d++ ] = point.pos.gX()*mRadiusInv;
+			pointPos[ d++ ] = point.pos.gY()*mRadiusInv;
+			pointPos[ d++ ] = point.pos.gZ()*mRadiusInv;
+			if( displayMode == DisplayMode.WIRE_VEL ){
+				Vec3 velPrt = ( ( point.parent.xLocal_3D.mult( point.parent.mFlowDir_2D.gX() ) ).add( point.parent.yLocal_3D.mult( point.parent.mFlowDir_2D.gY() ) ) ).norm();
+				pointColor[ c++ ] = velPrt.gX();
+				pointColor[ c++ ] = velPrt.gY();
+				pointColor[ c++ ] = velPrt.gZ();
+				pointColor[ c++ ] = 1.0f;
+			} else if( displayMode == DisplayMode.WIRE_BNC ){
+				pointColor[ c++ ] = 1.0f; //point.pos.gX()*0.4f + 0.6f;
+				pointColor[ c++ ] = ( point.triggeredTriShift ? 1.0f : 0.0f );//point.pos.gY()*0.4f + 0.6f;
+				pointColor[ c++ ] = ( point.triggeredSideBC ? 1.0f : 0.0f );//point.pos.gZ()*0.4f + 0.6f;
+				pointColor[ c++ ] = 1.0f;
+			} else if( displayMode == DisplayMode.WIRE_SKY ){
+				pointColor[ c++ ] = 1.0f;
+				pointColor[ c++ ] = 1.0f;
+				pointColor[ c++ ] = 1.0f;
+				pointColor[ c++ ] = 1.0f;
+			} else {
+				pointColor[ c++ ] = 1.0f;
+				pointColor[ c++ ] = 0.0f;
+				pointColor[ c++ ] = 0.0f;
+				pointColor[ c++ ] = 1.0f;
+			}
+
+			pointSize[ ps++ ] = 8.0f;//point.pos.gZ()*3.0f + 6.0f;
+		}
+		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
+		fboP  = InitializeBuffer( fboP, pointPos );
+		fboC  = InitializeBuffer( fboC, pointColor );
+		fboPS = InitializeBuffer( fboPS, pointSize);
+
+		mPrtPositions = fboP;
+		mPrtColors = fboC;
+		mPrtPointSize = fboPS;
+	}
+	
+	private void initSkyLayerFB( List<List<WorldTri>> skyLayerRes )
+	{
+		Logger.post( "Entered initSkyLayerFB" );
+		//Logger.post( "Reinitialoze surface w weights");
+		FloatBuffer fboP = null, fboN = null, fboC = null, fboT = null;
+
+		int layers = skyLayerRes.size();
+		mTris = skyLayerRes.get(0).size() * layers;
+		int dLen = mTris * 3;
+		
+		Logger.post( "layers, " + layers + " mTris, " + mTris );
+
+		int p = 0;
+		int n = 0;
+		int c = 0;
+		int t = 0;
+		float[] TexCoorData = new float[] {												
+			0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f,
+			0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f
+		};
+
+		float[] triNormalData = new float[ dLen * mNormalDataSize ];
+		float[] triPosData = new float[ dLen * mPositionDataSize ];
+		float[] triColorData = new float[ dLen * mColorDataSize ];
+		float[] triTexData = new float[ dLen * mTextureCoordinateDataSize ];
+		for( List<WorldTri> layer : skyLayerRes ){
+			for( WorldTri tri : layer ){
+				Vec3 posNorm = tri.pos.norm();
+				for( int i = 0; i < 3; i++ ){
+					WorldVert cI = tri.corner.get(i);
+					Vec3 tColor = findElevColor( cI.elevation, elevLines );
+					triColorData[ c ]= tColor.gX(); c++;
+					triColorData[ c ]= tColor.gY(); c++;
+					triColorData[ c ]= tColor.gZ(); c++;
+					triColorData[ c ]= 1.0f; c++;
+					triNormalData[ n ] = posNorm.gX(); n++;
+					triNormalData[ n ] = posNorm.gY(); n++;
+					triNormalData[ n ] = posNorm.gZ(); n++;
+					triPosData[ p ]    = tri.corner.get(i).pos.gX()*mRadiusInv; p++;
+					triPosData[ p ]    = tri.corner.get(i).pos.gY()*mRadiusInv; p++;
+					triPosData[ p ]    = tri.corner.get(i).pos.gZ()*mRadiusInv; p++;
+					triTexData[ t ]    = TexCoorData[ t%12 ]; t++;
+					triTexData[ t ]    = TexCoorData[ t%12 ]; t++;
+				}
+			}
+		}
+
+		
+		short[] drawOrder = new short[ dLen ];
+		for( short i = 0; i < dLen; i++ ){
+			drawOrder[i] = (short)(dLen - 1 - i);
+		}
+
+		// initialize byte buffer for the draw list
+		mSkyIndexBuffer = ByteBuffer
+			.allocateDirect(drawOrder.length * BYTES_PER_SHORT).order(ByteOrder.nativeOrder())
+			.asShortBuffer();
+		mSkyIndexBuffer.put(drawOrder).position(0);
+
+		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
+		fboP = InitializeBuffer( fboP, triPosData );
+		mSkyPositions = fboP;
+
+		fboN = InitializeBuffer( fboN, triNormalData );
+		mSkyNormals = fboN;
+
+		fboT = InitializeBuffer( fboT, triTexData );
+		mSkyTexCoords = fboT;
+		
+		fboC = InitializeBuffer( fboC, triColorData );
+		mSkyColors = fboC;
+	}
+	
+	private void initSkyPointFB( List<List<List<WorldTri>>> skyLayer )
+	{
+		Logger.post( "Entered initSkyPointFB" );
+		FloatBuffer fboP = null, fboC = null, fboPS = null;
+
+		int d = 0;
+		int c = 0;
+		int ps = 0;
+
+		int prtCnt = 0;
+		for( List<List<WorldTri>> res : skyLayer ){
+			int layerQty = res.size()-1;
+			Logger.post( "layerQty " + layerQty );
+			int triQty   = res.get(0).size();
+			Logger.post( "triQty " + triQty );
+			int prtQty   = res.get(0).get(0).particles.size();
+			Logger.post( "prtQty " + prtQty );
+			prtCnt += layerQty * triQty * prtQty;
+		}
+		
+		float[] pointPos   = new float[ prtCnt * mPositionDataSize ];
+		float[] pointColor = new float[ prtCnt * mColorDataSize ];
+		float[] pointSize  = new float[ prtCnt * mPointSizeDataSize ];
+
+		for( List<List<WorldTri>> res : skyLayer ){
+			for( List<WorldTri> layer : res ){
+				for( WorldTri tri : layer ){
+					for( Particle point : tri.particles ){
+						// Position
+						pointPos[ d++ ] = point.pos.gX()*mRadiusInv;
+						pointPos[ d++ ] = point.pos.gY()*mRadiusInv;
+						pointPos[ d++ ] = point.pos.gZ()*mRadiusInv;
+						// Color
+						if( displayMode == DisplayMode.WIRE_VEL ){
+							Vec3 velPrt = point.vel3D.norm();
+							pointColor[ c++ ] = velPrt.gX();
+							pointColor[ c++ ] = velPrt.gY();
+							pointColor[ c++ ] = velPrt.gZ();
+							pointColor[ c++ ] = 1.0f;
+						} else if( displayMode == DisplayMode.WIRE_BNC ){
+							pointColor[ c++ ] = 1.0f; //point.pos.gX()*0.4f + 0.6f;
+							pointColor[ c++ ] = ( point.triggeredTriShift ? 1.0f : 0.0f );//point.pos.gY()*0.4f + 0.6f;
+							pointColor[ c++ ] = ( point.triggeredSideBC ? 1.0f : 0.0f );//point.pos.gZ()*0.4f + 0.6f;
+							pointColor[ c++ ] = 1.0f;
+						} else if( displayMode == DisplayMode.WIRE_SKY ){
+							pointColor[ c++ ] = 1.0f;
+							pointColor[ c++ ] = 1.0f;
+							pointColor[ c++ ] = 1.0f;
+							pointColor[ c++ ] = 1.0f;
+						} else {
+							pointColor[ c++ ] = 1.0f;
+							pointColor[ c++ ] = 0.0f;
+							pointColor[ c++ ] = 0.0f;
+							pointColor[ c++ ] = 1.0f;
+						}
+						// Size
+						pointSize[ ps++ ] = 4.0f; //point.pos.gZ()*3.0f + 6.0f;
+					}
+				}
+			}
+		}
+		
+		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
+		fboP  = InitializeBuffer( fboP, pointPos );
+		fboC  = InitializeBuffer( fboC, pointColor );
+		fboPS = InitializeBuffer( fboPS, pointSize);
+
+		mSkyPrtPositions = fboP;
+		mSkyPrtColors    = fboC;
+		mSkyPrtPointSize = fboPS;
+		
+		Logger.post( "PrtPos 6 & 9 " + mSkyPrtPositions.get(6) + ", " + mSkyPrtPositions.get(9) );
+		mSkyPrtPositions.position(0);
+		Logger.post("Leaving initSkyPointFB" );
 	}
 
 	private boolean SolveEarth( List<WorldPlate> plates, List<WorldVert> verts, List<List<WorldTri>> surface )
@@ -770,17 +1034,43 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 		if( doneBuildEarthCFD && !doneCrustFlow ){
 			// Flow dirt across tiles
-			displayMode = DisplayMode.WIRE;
+			displayMode = DisplayMode.WIRE_VEL;
 			doneCrustFlow = SolveCrustFlow( plates, verts );
 		}
 		
-		if( doneCrustFlow && !doneEarth ){
+		if( !doneNormalizeEarth && doneCrustFlow ){
+			NormalizeEarth( verts );
+			CalcElevLines( verts );
+			doneNormalizeEarth = true;
+		}
+		
+		if( doneNormalizeEarth && !doneEarth ){
 			// Another mesh divide to make it look nice
 			doneEarth = RefineSurface( plates, verts, surface, plates.size() * 128 );
 			initSurfacePosFBwElev( surface.get(surface.size()-1) );
 		}
 		
 		return doneEarth;
+	}
+
+	private void CalcElevLines(List<WorldVert> verts)
+	{
+		List<Float> elevSort = new ArrayList<Float>();
+		int bands = 10;
+		elevLines = new float[bands];
+		
+		for( WorldVert vert : mVert ){
+			elevSort.add( vert.elevation );
+		}
+
+		Collections.sort( elevSort );
+
+		// sort into groups w cutoffs based on elev
+		int vPerBand = elevSort.size() / bands;
+		for( int i = 0; i < bands; i++ ){
+			int ind = vPerBand * (i+1);
+			elevLines[ i ] = elevSort.get(ind);
+		}
 	} 
 	
 	private boolean RefineSurface( List<WorldPlate> plates, List<WorldVert> verts, List<List<WorldTri>> surface, int breakLimit )
@@ -1035,13 +1325,21 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 						float triIn = triEdge / 4;  // assumme about a quarter in
 						float areaPlate = plate.mPctSurfaceTile * mAreaSurfaceEarth;
 						float areaLand  = areaPlate * mPctLand;*/
-						float flowTarget  = plate.mVelMag * plate.mElevAvgTarget * tTri.scale * mDensityAvgEarth * mPctLand;
-						//                  m/s             m                      m            kg/m3              %(no units)
-						float massPrtGoal = tTri.mPlate.area * plate.mElevAvgTarget * mPctLand * mDensityAvgEarth / prtNumDensity;
+						float massPlateFull = tTri.mPlate.area * plate.mElevAvgTarget * mPctLand * mDensityAvgEarth;
+						float prtPerPlate   = plate.getTriCnt()*prtNumDensity;
+						float massPrtGoal   = massPlateFull / prtPerPlate;
+						float radiusPlate   = (float)Math.sqrt(tTri.mPlate.area / 3.14159f);
+						float circPlateQtr  = 3.14159f * radiusPlate * (2.0f / 4.0f);
+						float edgeTris      = circPlateQtr / tTri.scale;
+						float timeTot       = mTimestepEarth * crustSolveCntMax;
+						float flowTarget    = massPlateFull / ( edgeTris * crustSolveCntMax );
+						//Logger.post("plate; vel, elevTarg, area, tris " + plate.mVelMag + ", " + plate.mElevAvgTarget + ", " + plate.area + ", " + plate.getTriCnt() + " tri; scale " + tTri.scale );
+						Logger.post("massGoal " + massPrtGoal + " flowTarget " + flowTarget + ", prtPerPlate " + prtPerPlate + ", edgeTri" + edgeTris );
 						// choose bc
 						// bcs are static type ID + array config floats
 						//if( flowComp > 0.5f ){
 							//tTri.edge.get(s).BC = new CFDBnd( CFDBnd.OUT, new float[]{} );
+						float coefRebound = 0.75f;  // very elastic
 						if( flowComp > 0.5f ){
 							// straight ahead, should be restricted outflow
 							// backpressure set to hit target density
@@ -1057,12 +1355,11 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 						} else if( flowComp < -0.5f ){
 							// behind us (against flow), should be inflow edge
 							// add particles w vel = %flowRate
-							tTri.edge.get(s).BC = new CFDBnd( CFDBnd.IN, new float[]{ flowTarget, massPrtGoal, mDensityAvgEarth } );
+							tTri.edge.get(s).BC = new CFDBnd( CFDBnd.IN, new float[]{ coefRebound, flowTarget, massPrtGoal, mDensityAvgEarth } );
 							//Logger.post( "New IN BC w flowTarget, mass, density " + tTri.edge.get(s).BC.mArgs[0] + ", " + tTri.edge.get(s).BC.mArgs[1] + ", " + tTri.edge.get(s).BC.mArgs[2] );
 							//Logger.post( "particles " + tTri.particles );
 						} else {
 							// this is a side boundary
-							float coefRebound = 0.75f;  // very elastic
 							tTri.edge.get(s).BC = new CFDBnd( CFDBnd.SIDE, new float[]{ coefRebound } );
 						} // endif
 					}// endif
@@ -1143,8 +1440,8 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 							prt.pos3DTo2D();
 							particles.add( prt );
 						}
-						if( prt.vel2D.length() > 1.0f ){
-							Logger.post( "Fast prt: vel " + prt.vel2D.length() + " acc " + prt.acc2D.length() );
+						if( prt.vel2D.length() > mRadius*0.1 ){
+							//Logger.post( "Fast prt: vel " + prt.vel2D.length() + " acc " + prt.acc2D.length() );
 						}
 					}
 					tri.particles = new ArrayList<Particle>();
@@ -1156,72 +1453,26 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		}
 	}
 	
-	private void initSurfacePosFBwElev(List<WorldTri> surface )
+	private boolean NormalizeEarth(List<WorldVert> verts)
 	{
-		//Logger.post( "Reinitialoze surface w weights");
-		FloatBuffer fboP = null;
-
-		mTris = surface.size();
-
-		int p = 0;
-
-		float[] triPosData = new float[ mTris * 3 * mPositionDataSize ];
-		for( WorldTri tri : surface ){
-			for( int i = 0; i < 3; i++ ){
-				WorldVert cI = tri.corner.get(i);
-				//Logger.post( "elev " + cI.elevation );
-				float elevMult = (1.0f + cI.elevation / mElevAvgTarget * 0.5f );
-				triPosData[ p ] = cI.pos.gX() * elevMult; p++;
-				triPosData[ p ] = cI.pos.gY() * elevMult; p++;
-				triPosData[ p ] = cI.pos.gZ() * elevMult; p++;
+		float ElevMax = 0.0f;
+		for( WorldVert vert : verts ){
+			if( ElevMax < vert.elevation ){
+				ElevMax = vert.elevation;
 			}
 		}
-
-		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
-		fboP = InitializeBuffer( fboP, triPosData );
-		mSurfacePositions = fboP;
-	}
-	
-	private void initParticleFB()
-	{
-		FloatBuffer fboP = null, fboC = null, fboPS = null;
-
-		int d = 0;
-		int c = 0;
-		int ps = 0;
 		
-		float[] pointPos = new float[ particles.size() * mPositionDataSize ];
-		float[] pointColor = new float[ particles.size() * mColorDataSize ];
-		float[] pointSize = new float[ particles.size() * mPointSizeDataSize ];
+		Logger.post( "Normalize: ElevMax " + ElevMax );
 		
-		for( int i = 0; i < particles.size(); i++ ){
-			Particle point = particles.get(i);
-			pointPos[ d++ ] = point.pos.gX();
-			pointPos[ d++ ] = point.pos.gY();
-			pointPos[ d++ ] = point.pos.gZ();
-			if( displayMode == DisplayMode.WIRE ){
-				Vec3 velPrt = ( ( point.parent.xLocal_3D.mult( point.parent.mFlowDir_2D.gX() ) ).add( point.parent.yLocal_3D.mult( point.parent.mFlowDir_2D.gY() ) ) ).norm();
-				pointColor[ c++ ] = velPrt.gX();
-				pointColor[ c++ ] = velPrt.gY();
-				pointColor[ c++ ] = velPrt.gZ();
-				pointColor[ c++ ] = 1.0f;
-			} else {
-				pointColor[ c++ ] = 1.0f; //point.pos.gX()*0.4f + 0.6f;
-				pointColor[ c++ ] = ( point.triggeredTriShift ? 1.0f : 0.0f );//point.pos.gY()*0.4f + 0.6f;
-				pointColor[ c++ ] = ( point.triggeredSideBC ? 1.0f : 0.0f );//point.pos.gZ()*0.4f + 0.6f;
-				pointColor[ c++ ] = 1.0f;
-			}
-			
-			pointSize[ ps++ ] = 8.0f;//point.pos.gZ()*3.0f + 6.0f;
+		for( WorldVert vert : verts ){
+			//Logger.post( "elev before mult " + vert.elevation );
+			vert.elevation *= mElevAvgTarget / ElevMax;
+			//Logger.post( "elev after mult " + vert.elevation );
+			Vec3 vPosNorm = vert.pos.norm();
+			vert.pos = vPosNorm.mult( mRadius + vert.elevation );
 		}
-		//Logger.post( "pos 0, 1, & 2 " + pointPos[0] + ", " + pointPos[1] + ", " + pointPos[2] );
-		fboP  = InitializeBuffer( fboP, pointPos );
-		fboC  = InitializeBuffer( fboC, pointColor );
-		fboPS = InitializeBuffer( fboPS, pointSize);
-
-		mPrtPositions = fboP;
-		mPrtColors = fboC;
-		mPrtPointSize = fboPS;
+		
+		return true;
 	}
 
 	private void SolveFire( List<List<WorldTri>> surface, float tilt )
@@ -1249,13 +1500,18 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		}
 	}
 
-	private boolean SolveWind(List<List<WorldTri>> skyLayer, List<Particle> air, float layerCnt, float layerH )
+	private boolean SolveWind( List<WorldVert> verts, List<List<WorldTri>> surface, List<List<List<WorldTri>>> skyLayer, List<Particle> air, int resMax, float layerCnt, float layerH )
 	{
+		Logger.post("------Entered SolveWind");
 		// Soln2: 3D CFD w heating, bouyancy
 		// make many joined 3D volumes
 		// take surface, scale out x times
-		if( !doneWindVolumes ){
-			doneWindVolumes = Build3DVolume( skyLayer, layerCnt, layerH );
+		if( !doneInitSkyLayers ){
+			doneInitSkyLayers = InitSkyLayers( surface, skyLayer, resMax, layerCnt );
+		}
+		
+		if( !doneWindVolumes && doneInitSkyLayers ){
+			doneWindVolumes = BuildAirCFDDomain( verts, skyLayer, layerH );
 		}
 		
 		// Setup particles in volume
@@ -1265,16 +1521,49 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 			doneSetupWind = SetupWindParticles( skyLayer, air );
 		}
 		
+		/*if( doneSetupWind && !doneInitSkyBuffers ){
+			displayMode = DisplayMode.WIRE_SKY;
+			initSkyLayerFB( skyLayer.get( skyLayer.size()-1 ) );
+			initSkyPointFB( skyLayer );
+			doneInitSkyBuffers = true;
+		}*/
+		
 		// Slowly spin Earth w solar heat on half
 		if( doneSetupWind && !doneWind ){
-			doneWind = SolveWindCFD( skyLayer, air );
+			//doneWind = SolveWindCFD( skyLayer, air );
 		}
 		
 		return doneWind;
 	}
 
-	private boolean Build3DVolume(List<List<WorldTri>> skyLayer, float layerCnt, float layerH)
+	private boolean InitSkyLayers(List<List<WorldTri>> surface, List<List<List<WorldTri>>> skyLayer, int resMax, float layerMax )
 	{
+		Logger.post("----Entered InitSkyLayers");
+		for( int s = 0; s <= resMax; s++ ){
+			Logger.post( "Adding skyLayer list for resolution " + s );
+			skyLayer.add( new ArrayList<List<WorldTri>>() );
+			
+			List<List<WorldTri>> resCur = skyLayer.get(s);
+			
+			// base layer of each resolution group is surface
+			resCur.add( surface.get(s) );
+			WorldTri tri0 = surface.get(s).get(0);
+			Logger.post( "res " + s + " tri 0 c0 pos " + tri0.corner.get(0).pos.toS() + ", c1 " + tri0.corner.get(1).pos.toS() + ", c2 " + tri0.corner.get(2).pos.toS()  );
+			Logger.post( "edge 0 " + tri0.edge.get(0) );
+			Logger.post( "edge 0 vec " + tri0.edge.get(0).vec.toS() );
+			for( int L = 0; L < layerMax; L++ ){
+				Logger.post( "Adding ceiling to layer " + L );
+				// Add ceiling layers till we hit air max
+				resCur.add( new ArrayList<WorldTri>() );
+			}
+		}
+		
+		return true;
+	}
+
+	private boolean BuildAirCFDDomain( List<WorldVert> verts, List<List<List<WorldTri>>> skyLayer, float layerH)
+	{
+		Logger.post("----Entered BuildAirCFDDomain");
 		boolean doneVolume = false;
 		
 		// First, find all the verts and surfaces of the last layer
@@ -1282,100 +1571,209 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		   // straight copy surface(size-1) = skylayer(0)
 		// Copy them to new lists (they can remain the same objects)
 		
-		
-		if( skyLayer.size() < layerCnt ){
-			List<WorldTri> layerCur =  skyLayer.get( skyLayer.size()-1 );
-			WorldTri triCur = null;
-			boolean layerFinished = false;
+		while( checkUpdate() ){
+			// for each resolution
+			if( skyResCnt < skyLayer.size() ){
+				List<List<WorldTri>> resCur = skyLayer.get( skyResCnt );
 
-			// start w last tile not extruded of current layer
-			for( WorldTri tTri : layerCur ){
-				if( tTri.Up == null ){
-					triCur = tTri;
-					break;
-				}}
+				// if we have a remaining layer to build
+				if( skyLayerCnt+1 < resCur.size() ){
+					// define the base and ceiling layer
+					List<WorldTri> layerCur =  resCur.get( skyLayerCnt );
+					List<WorldTri> layerUp = resCur.get( skyLayerCnt+1 );
 
-			List<WorldTri> triExtrude = new ArrayList<WorldTri>();
-			while( checkUpdate() ){
-				if( !layerFinished ){
+					WorldTri triCur = null;
+
+					// find next tile not extruded of current layer
+					for( WorldTri tTri : layerCur ){
+						if( tTri.Up == null ){
+							triCur = tTri;
+							break;
+					}}
+					
 					if( triCur != null ){
-						// do crawling extrude
-						// check if neighbors extruded
-						// if not, recursively add neighbors to extrude queue
-						// if yes, mark to join to existing neighbors bndrys
-						
+						//Logger.post("triCur != null, extruding " + triCur + "in resCnt " + skyResCnt + " in layer " + skyLayerCnt );
 						// extrude tile into 3D volume
-						// treat like many layered 2D volumes
-						// All bnd checks are 2D + z because thin, Flow is 3D
-						List<WorldTri> newTri = triCur.extrudeUp( skyVerts, layerH );
-						
-						for( WorldTri tTri : newTri ){
-							triExtrude.add( tTri );
+						// check if neighbors extruded
+						// if yes, mark to join to existing neighbors bndry
+						float height = layerH * (float)Math.pow( 2.0f, skyLayerCnt );
+						//Logger.post( "resCnt " + skyResCnt + " in layer " + skyLayerCnt + " height " + height );
+						//Logger.post( "edge 2 vec base before extrude" + triCur.edge.get(2).vec.toS() );
+						triCur.extrudeUp( verts, layerUp, height );
+						//Logger.post( "edge 2 vec Up " + triCur.Up.edge.get(2).vec.toS() );
+						triCur.set3DCFDEnv();
+						// if on last layer, setup ceiling
+						if( skyLayerCnt+2  == resCur.size() ){
+							triCur.Up.set3DCFDEnv();
 						}
-
-						triCur = triExtrude.get(0);
-						if( triCur != null ){
-							triExtrude.remove( triCur );
-						}
+						//Logger.post( "edge 2 vec after set CFD" + triCur.Up.edge.get(2).vec.toS() + ", vec2D" + triCur.edge.get(2).vec2D.toS() );
 					} else {
-						// if null, check the list once more
-						// if still null, be done w this layer
-						layerFinished = true;
+						// if no more tris w tri.Up unextruded, finished
+						skyLayerCnt++;
+						//Logger.post( "no tris, skyLayerCnt++ = " + skyLayerCnt );
 					}
 				} else {
-					// if layer finished
-					if( layerCnt >= skyLayer.size()+1 ){
-						List<WorldTri> layerNew = new ArrayList<WorldTri>();
-						skyLayer.add( layerNew );
-						for( WorldTri tri : layerCur ){
-							layerNew.add( tri.Up );
-						}
-						layerFinished = false;
-						triCur = layerNew.get(0);
-					} else {
-						// if everything finished
-						doneVolume = true;
-					}
+					// done w resolution
+					skyResCnt++;
+					skyLayerCnt = 0;
+					//Logger.post( "skyLayerCnt+1 " + (skyLayerCnt+1) + " > resCur.size " + resCur.size() + ", skyResCnt++ = " + skyResCnt );
 				}
+			} else {
+				// done w all resolutions
+				doneVolume = true;
 			}
 		}
 		
 		return doneVolume;
 	}
 	
-	private boolean SetupWindParticles(List<List<WorldTri>> skyLayer, List<Particle> air)
+	private boolean SetupWindParticles( List<List<List<WorldTri>>> skyLayer, List<Particle> air)
 	{
+		Logger.post("Entered SetupWindParticles");
 		// for each tri prism of each layer
 		// add mPrtPerWindPrism particles to the volume
 		// randomly distributed
-		
-		for( List<WorldTri> layer : skyLayer ){
-			for( WorldTri prism : layer ){
-				float vol = prism.area * prism.height;
-				float airPrtMass = vol * mDensityAvgAir;
-				for( int p = 0; p < mAirNumDensity; p++ ){
-					// prt pos as 0-1 in each dir
-					Vec3 posPrt = new Vec3( (float)Math.random(), (float)Math.random(), (float)Math.random() );
-					prism.particles.add( new Particle( prism, airPrtMass, mDensityAvgAir, posPrt ) );
+		float heightCur = 0;
+		for( int r = 0; r < skyLayer.size(); r++ ){
+			List<List<WorldTri>> res = skyLayer.get(r);
+			
+			int Im1 = res.size() - 1;
+			for( int L = 0; L <  Im1; L++ ){
+				List<WorldTri> layer = res.get(L);
+				WorldTri       First = layer.get(0);
+				
+				int prtCnt   = 0;
+				float height = First.height;
+				Logger.post( "First height " + height + " heightCur " + heightCur );
+				if( First.height > 0 ){
+					Vec3 propsBase = CalcAirStartDensityTempPres( heightCur );
+					Vec3 propsUp   = CalcAirStartDensityTempPres( heightCur + height );
+					Vec3 propsAvg  = ( propsBase.add( propsUp ) ).mult( 0.5f );
+					Logger.post( "Props: base " + propsBase.toS() + ", Up " + propsUp.toS() + ", avg " + propsAvg.toS() );
+					for( WorldTri prism : layer ){
+						//Logger.post( "Prism " + prism );
+						float vol = prism.area * prism.height;
+						float airMassPrism = vol * propsAvg.gRho();
+						float airPrtMass = airMassPrism / mAirNumDensity;
+
+						for( int p = 0; p < mAirNumDensity; p++ ){
+							//Logger.post( "prt " + p );
+							// prt pos as 0-1 in each dir
+							float e0rand = (float)Math.random();
+							float e1rand = (float)Math.random();
+							Vec2 e0seg = prism.edge.get(0).vec2D.mult( e0rand );
+							Vec2 e1seg = prism.edge.get(1).vec2D.mult( e0rand*e1rand );
+							//Logger.post( "Found edge segs" );
+							Vec2 posPrtxy = ( prism.corner2D.get(0).add( e0seg ) ).add( e1seg );
+							float posPrtz = (float)Math.random();
+					
+							float prtDensity = propsBase.gRho() * (1-posPrtz) + propsUp.gRho() * posPrtz;
+
+							posPrtz *= height;
+							Vec3 posPrt = new Vec3( posPrtxy.gX(), posPrtxy.gY(), posPrtz );
+							//Logger.post( "Found prt pos " + posPrt.toS() );
+							
+							Particle newPrt = new Particle( prism, airPrtMass, prtDensity, posPrt );
+							prism.particles.add( newPrt );
+							newPrt.pos2DTo3D();
+							
+							prtCnt++;
+						}
+					}
+					heightCur += height;
+				}
+				// end current layer, how many prt?
+				Logger.post("res " + r + " layer " + L + " prtCnt " + prtCnt );
+			}
+			// end layer loop, reset height
+			heightCur = 0;
+		}
+		// end res loop
+		Logger.post("Leaving SetupWindParticles");
+		return true;
+	}
+
+	private Vec3 CalcAirStartDensityTempPres(float heightCur)
+	{
+		// calc T = T0-LH
+		// P = P0(1-(LH)/T0)^(gM/RL)
+		// rho = PM/RT
+		float P0 = 101325.0f;  // Pa
+		float T0 = 288.15f;  // K
+		float G = accGrav;
+		float L0_10 = 0.0065f; // K/m
+		float L10_20 = 0.0f;
+		float L20_40 = -0.00075f;
+		float L40_80 = -0.0009f;
+		float R = 8.31447f; // J/mol-K
+		float M = 0.0289644f; // kg/mol
+		float H = heightCur; // m
+		float T=0, P=0;
+		float H0_10 = H, H10_20, H20_40, H40_80;
+		// calculate the lower troposphere
+		if( H < 10000.0f ){
+			H0_10 = H;
+			T = T0-(L0_10*H0_10);
+			P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L0_10)) );
+		} else {
+			H0_10 = 10000;
+			T = T0-(L0_10*H0_10);
+			P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L0_10)) );
+			T0 = T;
+			P0 = P;
+			// calculate the upper troposphere
+			if( H < 20000.0f ){
+				H10_20 = H - 10000.0f;
+				T = T0-(L10_20*H10_20);
+				P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L10_20)) );
+			} else {
+				H10_20 = 10000.0f;
+				T = T0-(L10_20*H10_20);
+				P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L10_20)) );
+				T0 = T;
+				P0 = P;
+				// calculate the lower stratosphere
+				if( H < 40000.0f ){
+					H20_40 = H - 20000.0f;
+					T = T0-(L20_40*H20_40);
+					P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L20_40)) );
+				} else {
+					H20_40 = 20000.0f;
+					T = T0-(L20_40*H20_40);
+					P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L20_40)) );
+					T0 = T;
+					P0 = P;
+					
+					// calculate the upper stratosphere
+					H40_80 = H - 40000.0f;
+					T = T0-(L40_80*H40_80);
+					P = P0 * (float)Math.pow( (T/T0), (G*M/(R*L40_80)) );
 				}
 			}
 		}
 		
-		return true;
+		float rho = P*M/(R*T);
+		
+		Vec3 out = new Vec3( rho, T, P );
+		
+		return out;
 	}
 
-	private boolean SolveWindCFD(List<List<WorldTri>> skyLayer, List<Particle> air)
+	private boolean SolveWindCFD(List<List<List<WorldTri>>> skyLayer, List<Particle> air)
 	{
+		Logger.post("Entered SolveWindCFD");
 		while( checkUpdate() ){
 			if( windSlvCnt < windSlvCntMax ){
 				Logger.post( "wind solve cnt." + windSlvCnt ); 
 
 				// for each layer and tri
-				for( List<WorldTri> layer : skyLayer ){
-					for( WorldTri tri : layer ){
-						tri.updateParticles( mTimestepWind );
-					}
-				} // end for each layer
+				for( List<List<WorldTri>> res : skyLayer ){
+					for( List<WorldTri> layer : res ){
+						for( WorldTri tri : layer ){
+							tri.updateParticles( mTimestepWind );
+				}}}
+					
+				 // end for each layer
 
 				// transform particles back to 3d space
 				// for plottimg and fimd nearest tris
@@ -1385,22 +1783,21 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 				for( int v = 0; v < skyVerts.size(); v++ ){
 					WorldVert vv = skyVerts.get(v);
 					vv.mass = 0.0f;
-					vv.momentum2D.eq( 0.0f, 0.0f );
+					vv.momentum3D.eq( 0.0f, 0.0f, 0.0f );
 					vv.energy = 0.0f;
 					vv.PE = 0.0f;
 					vv.KE = 0.0f;
-					vv.elevation = 0.0f;
 					vv.prtAccumlated = 0;
 				}
 
 				// Once all particles have moved and been tile shifted
 				// for each layer
-				for( List<WorldTri> layer : skyLayer ){
-					for( WorldTri tri : layer ){
-						tri.accumulateProps();
-						tri.computeBulkProps();
-					}
-				} // end for each plate
+				for( List<List<WorldTri>> res : skyLayer ){
+					for( List<WorldTri> layer : res ){
+						for( WorldTri tri : layer ){
+							tri.accumulateProps();
+							tri.computeBulkProps();
+				}}}
 
 				windSlvCnt++;
 			} else {
@@ -1409,7 +1806,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		}// end while loop
 
 		// load any existing particles to be drawn
-		//initParticleFB();
+		initSkyPointFB( skyLayer );
 
 		return false;
 	}
@@ -1438,24 +1835,34 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		//Logger.post( "Entered draw() for DisplayLayerMapSphere" );
 		//Logger.post( "doneInitPtSlv " + doneInitPtSlv + " plate size " + mPlates.size() + " vert size " + mVert.size() );
 		if( doneSurfaces ){
-			drawSurfaceTris();
+			if( displayMode == DisplayMode.WIRE_SKY ){
+				displayMode = DisplayMode.ELEV;
+				drawSurfaceTris( mSurfacePositions, mSurfaceNormals, mSurfaceColors, mSurfaceTexCoords, mSurfaceIndexBuffer );
+				displayMode = DisplayMode.WIRE_SKY;
+			} else {
+				drawSurfaceTris( mSurfacePositions, mSurfaceNormals, mSurfaceColors, mSurfaceTexCoords, mSurfaceIndexBuffer );
+			}
 		}
+		/*if( doneInitSkyBuffers ){
+			drawSurfaceTris( mSkyPositions, mSkyNormals, mSkyColors, mSkyTexCoords, mSkyIndexBuffer );
+			drawPoints( mSkyPrtPositions, mSkyPrtColors, mSkyPrtPointSize );
+		}*/
 		if( mPlateVerts.size() > 0 ){
 			drawPoints( mPlatePositions, mPlateColors, mPlatePointSize ); }
 		if( mVert.size() > 0 ){
 			drawPoints( mIcoPositions, mIcoColors, mIcoPointSize ); }
-		if( particles.size() > 0 ){
+		if( particles.size() > 0 && ( displayMode == DisplayMode.WIRE_VEL || ( displayMode == DisplayMode.WIRE_BNC ) ) ){
 			Logger.post( "particle cnt " + particles.size() );
 			drawPoints( mPrtPositions, mPrtColors, mPrtPointSize ); }
 	}
 
-	public void drawSurfaceTris(){
-
+	private void drawSurfaceTris(FloatBuffer positions, FloatBuffer normals, FloatBuffer colors, FloatBuffer texCoords, ShortBuffer indexBuffer  ){
 		//Logger.post( "Entered draw surface tris");
-		mPositions = mSurfacePositions;
-		mNormals = mSurfaceNormals;
-		mColors = mSurfaceColors;
-		mTextureCoordinates = mSurfaceTexCoords;
+		mPositions = positions;
+		mNormals = normals;
+		mColors = colors;
+		mTextureCoordinates = texCoords;
+		ShortBuffer mIndexBuffer = indexBuffer;
 		/*for( int i = 0; i < mPositions.capacity(); i+=3 ){
 			float p0 = mPositions.get(i+0);
 			float p1 = mPositions.get(i+1);
@@ -1527,10 +1934,10 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 		//GLES20.glDisable(GLES20.GL_CULL_FACE);
         // Draw the Sprite.
         //GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mTris);
-		if( displayMode == DisplayMode.WIRE ){
-			GLES20.glDrawElements(GLES20.GL_LINES, mTris*3, GLES20.GL_UNSIGNED_SHORT, mIcoIndexBuffer );
+		if( displayMode == DisplayMode.WIRE_VEL || ( displayMode == DisplayMode.WIRE_BNC || displayMode == DisplayMode.WIRE_SKY ) ){
+			GLES20.glDrawElements(GLES20.GL_LINES, mTris*3, GLES20.GL_UNSIGNED_SHORT, mIndexBuffer );
 		} else {
-			GLES20.glDrawElements(GLES20.GL_TRIANGLES, mTris*3, GLES20.GL_UNSIGNED_SHORT, mIcoIndexBuffer );
+			GLES20.glDrawElements(GLES20.GL_TRIANGLES, mTris*3, GLES20.GL_UNSIGNED_SHORT, mIndexBuffer );
 		}
 		//Logger.post( "done drawing" );
 		
@@ -1561,6 +1968,7 @@ public class DisplayLayerSphereMap extends DisplayLayerMap
 
 		// Pass in the positions
 		//Logger.post( "pointpositions " + pointPositions );
+		
 		pointPositions.position(0);
         GLES20.glVertexAttribPointer(pointPositionHandle, mPositionDataSize, GLES20.GL_FLOAT, false,
 									 0, pointPositions);        

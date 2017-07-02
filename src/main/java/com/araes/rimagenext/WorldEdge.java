@@ -30,14 +30,16 @@ public class WorldEdge
 	public void actBC( float ts )
 	{
 		if( BC.mType == CFDBnd.IN ){
-			// mArgs[0] = flowPerStep
-			// mArgs[1] = prt mass
-			// mArgs[2] = prt density
-			while( BC.flowThisStep < BC.mArgs[0]*ts ){
-				Particle prt = new Particle( parent, BC.mArgs[1], BC.mArgs[2] );
+			// mArgs]0] = rebound coef
+			// mArgs[1] = flowPerStep
+			// mArgs[2] = prt mass
+			// mArgs[3] = prt density
+			while( BC.flowThisStep < BC.mArgs[1] ){
+				Particle prt = new Particle( parent, BC.mArgs[2], BC.mArgs[3] );
 				prt.pos2D = new Vec2( (float)Math.random(), (float)Math.random() ).mult( 0.25f * vec2D.length() );
 				parent.particles.add( prt );
 				BC.flowThisStep += prt.mass;
+				//parent.Logger.post( "Added particle w mass " + prt.mass + " and pos " + prt.pos2D.toS() + " vec2d len " + vec2D.toS() );
 			}
 		} else if( BC.mType == CFDBnd.INRESTRICT ){
 			// mArgs[0] = flowPerPres for this BC
@@ -49,7 +51,7 @@ public class WorldEdge
 			// can be second order or log to be more stable
 			// BC.mArgs[0] = flowPerPres for this BC
 			float outFlowTarget = parent.P * BC.mArgs[0];
-			while( BC.flowThisStep < outFlowTarget* ts ){
+			while( BC.flowThisStep < outFlowTarget ){
 				Particle prt = new Particle( parent, BC.mArgs[1], BC.mArgs[2] );
 				prt.pos2D = (parent.corner2D.get(ind).add( vec2D.mult( (float)Math.random() ) )).mult(0.5f);
 				parent.particles.add( prt );
